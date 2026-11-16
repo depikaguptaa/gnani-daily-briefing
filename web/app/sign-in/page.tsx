@@ -21,9 +21,16 @@ export default function SignInPage() {
     setBusy(true);
     setError("");
     const supabase = createClient();
+    const requestedNext = new URLSearchParams(window.location.search).get("next") ?? "/dashboard";
+    const nextUrl = new URL(requestedNext, window.location.origin);
+    const next = requestedNext.startsWith("/") && nextUrl.origin === window.location.origin
+      ? `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`
+      : "/dashboard";
+    const callbackUrl = new URL("/auth/callback", window.location.origin);
+    callbackUrl.searchParams.set("next", next);
     const { error: authError } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=/dashboard` },
+      options: { emailRedirectTo: callbackUrl.toString() },
     });
     setBusy(false);
     if (authError) setError(authError.message);

@@ -91,6 +91,11 @@ export default function Dashboard({ email }: { email: string }) {
 
   useEffect(() => () => Object.values(audioUrlsRef.current).forEach((url) => URL.revokeObjectURL(url)), []);
 
+  useEffect(() => {
+    if (!focusedEpisode || loading) return;
+    document.getElementById(`episode-${focusedEpisode}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [episodes, focusedEpisode, loading]);
+
   const readyCount = useMemo(() => episodes.filter((episode) => episode.status === "ready").length, [episodes]);
 
   async function createBriefing(event: FormEvent<HTMLFormElement>) {
@@ -189,7 +194,7 @@ export default function Dashboard({ email }: { email: string }) {
             <section className="section-block episode-section" id="episodes">
               <div className="section-title"><div><p className="eyebrow">THE LISTENING ROOM</p><h2>Recent episodes</h2></div><span className="section-count">{episodes.length} editions</span></div>
               {loading ? <div className="loading-line">Loading episodes…</div> : episodes.length === 0 ? <div className="empty-episodes"><div className="empty-record">♫</div><div><b>Your first episode will appear here.</b><p>Once your briefing runs, we’ll email you a private listening link.</p></div></div> : <div className="episode-list">{episodes.map((episode) => (
-                <article className={`episode-card ${focusedEpisode === episode.id ? "is-focused" : ""}`} key={episode.id}>
+                <article id={`episode-${episode.id}`} className={`episode-card ${focusedEpisode === episode.id ? "is-focused" : ""}`} key={episode.id}>
                   <div className="episode-card-head"><div className="episode-cover"><span className="cover-small-lines"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></span></div><div className="episode-main"><div className="episode-date">{formatDate(episode.scheduled_for, briefings.find((item) => item.id === episode.briefing_id)?.timezone ?? timezone)}</div><h3>{episode.title ?? episode.topic}</h3><p>{episode.summary ?? episode.topic}</p><div className="episode-tags"><span>{episode.status === "ready" ? "READY TO LISTEN" : episode.status === "failed" ? "NEEDS ATTENTION" : "IN THE WORKS"}</span><span>·</span><span>{episode.status === "ready" ? formatDuration(episode.duration_seconds) : episode.status === "failed" ? "Retry limit reached" : "Researching sources"}</span></div></div>
                     {episode.status === "ready" && !audioUrls[episode.id] && <button className="play-button" onClick={() => void listen(episode)} disabled={loadingAudio === episode.id} aria-label={`Load audio for ${episode.title ?? episode.topic}`}>{loadingAudio === episode.id ? "…" : "▶"}</button>}
                   </div>

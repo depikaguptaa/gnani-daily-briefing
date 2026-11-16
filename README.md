@@ -39,12 +39,13 @@ Daily schedules use IANA time zones. A repeated wall time during a daylight-savi
 ## Set up the services
 
 1. Create a Supabase project. In the SQL editor, run [`api/migrations/001_initial.sql`](api/migrations/001_initial.sql). Create a **private** Storage bucket named `episodes`.
-2. In Supabase Auth, enable email sign-in and configure a transactional SMTP sender for magic links. Set the Site URL to the deployed web URL and add `<web-url>/auth/callback` to the allowed redirect URLs.
-3. Get personal API keys for Tavily Search and Gemini. Get the Gnani API key from the dashboard. The app defaults to `gemini-3.5-flash-lite` and Gnani `timbre-v3.0` with voice `Shivani`; each can be changed with environment variables.
-4. Set up Resend and verify a sender domain. Set `EMAIL_FROM` to that sender.
-5. Create `api/.env` from [`api/.env.example`](api/.env.example) only if it does not already exist. If it does, merge in missing settings so existing keys are preserved. Create `web/.env.local` from [`web/.env.example`](web/.env.example). Use personal keys and keep the Supabase service-role key only in the API and worker environments. Never commit either env file.
+2. In Supabase Auth, enable email sign-in. Set the Site URL to the deployed web URL. Add `https://<web-host>/auth/callback**` and `http://localhost:3000/auth/callback**` to the allowed redirect URLs. The app carries the episode link through the sign-in callback.
+3. In Resend, verify a sender domain and create a sending-only API key for that domain. Configure Supabase Auth custom SMTP with host `smtp.resend.com`, port `465`, username `resend`, and the Resend API key as the password. Supabase's default SMTP is restricted to project team addresses, so custom SMTP is required for other users. Use the same key for the worker's `RESEND_API_KEY`, and set `EMAIL_FROM` to an address on the verified domain.
+4. Get personal keys from the [Tavily dashboard](https://app.tavily.com/home), [Google AI Studio](https://aistudio.google.com/apikey), and the Gnani dashboard. The app defaults to `gemini-3.5-flash-lite` and Gnani `timbre-v3.0` with voice `Shivani`; each can be changed with environment variables.
+5. In Supabase project settings, copy the project URL, publishable key, and service-role/secret key. Get the Postgres connection string from the Supabase **Connect** dialog. For Render, use the **Session pooler** connection string, not a manually composed host. Replace the password placeholder and URL-encode reserved characters in the password.
+6. Create `api/.env` from [`api/.env.example`](api/.env.example) only if it does not already exist. If it does, merge in missing settings so existing keys are preserved. Create `web/.env.local` from [`web/.env.example`](web/.env.example). Use personal keys and keep the Supabase service-role key only in the API and worker environments. Never commit either env file.
 
-The API converts `postgres://` and `postgresql://` database URLs to the `postgresql+psycopg://` SQLAlchemy driver. Use the Supabase Postgres connection string with SSL enabled. The service-role key is used only for server-side access to the private audio bucket.
+The API converts `postgres://` and `postgresql://` database URLs to the `postgresql+psycopg://` SQLAlchemy driver. Use the Supabase Postgres connection string with SSL enabled. The service-role key is used only for server-side access to the private audio bucket. In Vercel, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (or the publishable key), and `NEXT_PUBLIC_API_URL`. In Render, set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `AUDIO_BUCKET` on both services. Add `CORS_ORIGINS` to the API, then add `TAVILY_API_KEY`, `GEMINI_API_KEY`, `GNANI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_URL` to the worker as listed in `render.yaml`.
 
 ## Run locally
 
@@ -75,7 +76,7 @@ The web app uses `NEXT_PUBLIC_API_URL=http://localhost:8000` by default. The API
 
 Connect this folder to Render and use [`render.yaml`](render.yaml) as a Blueprint. The API and scheduler are configured as continuously running paid services in Singapore. Add the `DATABASE_URL`, `SUPABASE_URL`, and storage credentials to both services. Add Tavily, Gemini, Gnani, Resend, `EMAIL_FROM`, and the deployed `APP_URL` to the worker. Set the API `CORS_ORIGINS` to the exact deployed web origin.
 
-The worker must stay at one instance while using a Gnani account that allows one active synthesis at a time. The advisory lock stops a second worker from running duplicate schedules. Render charges for these always-on services; the Gnani credit does not cover hosting or other API usage.
+The worker must stay at one instance while using a Gnani account that allows one active synthesis at a time. The advisory lock stops a second worker from running duplicate schedules. At the current published price, each `0.5c-512mb` always-on Render service is $7/month, so the API and worker total $14/month before usage-based charges. See [Render pricing](https://render.com/pricing) before applying the Blueprint. The Gnani credit does not cover hosting or other API usage.
 
 ### Vercel web app
 
