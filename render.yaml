@@ -1,0 +1,59 @@
+services:
+  - type: web
+    name: daily-context-api
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: AUDIO_BUCKET
+        value: episodes
+      - key: CORS_ORIGINS
+        sync: false
+  - type: worker
+    name: daily-context-worker
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    dockerCommand: python -m app.worker
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: AUDIO_BUCKET
+        value: episodes
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: GNANI_API_KEY
+        sync: false
+      - key: GNANI_MODEL
+        value: timbre-v3.0
+      - key: GNANI_VOICE
+        value: Shivani
+      - key: GNANI_LANGUAGE
+        value: en-IN
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: APP_URL
+        sync: false
