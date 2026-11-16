@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("daily-context.worker")
 MAX_ATTEMPTS = 3
 LOCK_ID = 803170241
+
+
+def validate_worker_config() -> None:
+    if engine is None or SessionLocal is None:
+        raise RuntimeError("DATABASE_URL is required")
+    required = {
+        "SUPABASE_URL": settings.supabase_url,
+        "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_key,
+        "TAVILY_API_KEY": settings.tavily_api_key,
+        "GEMINI_API_KEY": settings.gemini_api_key,
+        "GNANI_API_KEY": settings.gnani_api_key,
+        "RESEND_API_KEY": settings.resend_api_key,
+        "EMAIL_FROM": settings.email_from,
+        "APP_URL": settings.app_url,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(f"Worker configuration is missing: {', '.join(missing)}")
 
 
 def claim_due_briefing() -> bool:
@@ -185,21 +204,7 @@ async def notify_episode(message: tuple[UUID, str, str, str]) -> None:
 
 
 async def run_worker() -> None:
-    if engine is None or SessionLocal is None:
-        raise RuntimeError("DATABASE_URL is required")
-    required = {
-        "SUPABASE_URL": settings.supabase_url,
-        "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_key,
-        "TAVILY_API_KEY": settings.tavily_api_key,
-        "GEMINI_API_KEY": settings.gemini_api_key,
-        "GNANI_API_KEY": settings.gnani_api_key,
-        "RESEND_API_KEY": settings.resend_api_key,
-        "EMAIL_FROM": settings.email_from,
-        "APP_URL": settings.app_url,
-    }
-    missing = [name for name, value in required.items() if not value]
-    if missing:
-        raise RuntimeError(f"Worker configuration is missing: {', '.join(missing)}")
+    validate_worker_config()
 
     with engine.connect() as lock_connection:
         acquired = bool(lock_connection.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": LOCK_ID}).scalar())
@@ -226,5 +231,36 @@ async def run_worker() -> None:
             lock_connection.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": LOCK_ID})
 
 
+async def run_worker_once() -> None:
+    validate_worker_config()
+
+    with engine.connect() as lock_connection:
+        acquired = bool(lock_connection.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": LOCK_ID}).scalar())
+        lock_connection.commit()
+        if not acquired:
+            logger.info("worker_once_skipped reason=scheduler_lock_held")
+            return
+        try:
+            recover_stale_jobs()
+            scheduled = claim_due_briefing()
+            episode_id = claim_episode()
+            if episode_id is not None:
+                await generate_episode(episode_id)
+            notification = claim_notification()
+            if notification:
+                await notify_episode(notification)
+            logger.info(
+                "worker_once_finished scheduled=%s generated_episode=%s sent_notification=%s",
+                scheduled,
+                episode_id is not None,
+                notification is not None,
+            )
+        finally:
+            lock_connection.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": LOCK_ID})
+
+
 if __name__ == "__main__":
-    asyncio.run(run_worker())
+    parser = argparse.ArgumentParser(description="Run the daily briefing scheduler")
+    parser.add_argument("--once", action="store_true", help="process one scheduler cycle and exit")
+    args = parser.parse_args()
+    asyncio.run(run_worker_once() if args.once else run_worker())

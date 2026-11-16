@@ -9,7 +9,7 @@ flowchart LR
     U[User] --> W[Next.js dashboard]
     W -->|Supabase session JWT| A[FastAPI]
     A --> D[(Postgres)]
-    Q[Background worker] -->|claim due schedules| D
+    Q[GitHub Actions worker, every 5 minutes] -->|claim due schedules| D
     Q --> P[Gemini query planner]
     P --> T[Tavily live search]
     T --> G[Gemini cited script]
@@ -19,7 +19,7 @@ flowchart LR
     A -->|owner check, then audio bytes| S
 ```
 
-The worker uses Postgres rows as a durable queue. A transaction locks a due briefing, records an episode, and advances the next local-time occurrence. Episode generation moves through `queued`, `generating`, and `ready` or `failed`; stale jobs are recovered after a worker restart. Attempts use exponential backoff. A Postgres advisory lock ensures one active scheduler worker, which also avoids overlapping TTS requests against Gnani account limits. Row-level security is enabled on the application tables, and direct Data API access is revoked from `anon` and `authenticated`; user requests go through FastAPI, which verifies the Supabase token and filters every record by its owner ID.
+The worker uses Postgres rows as a durable queue. A transaction locks a due briefing, records an episode, and advances the next local-time occurrence. Episode generation moves through `queued`, `generating`, and `ready` or `failed`; stale jobs are recovered after a worker restart. Attempts use exponential backoff. A Postgres advisory lock prevents overlapping scheduled runs and duplicate TTS requests. The GitHub Actions workflow checks for due work every five minutes and processes one episode per run. Scheduled actions can start late, so delivery is approximate to the selected time. Row-level security is enabled on the application tables, and direct Data API access is revoked from `anon` and `authenticated`; user requests go through FastAPI, which verifies the Supabase token and filters every record by its owner ID.
 
 Research is bounded: Gemini plans up to three complementary searches, Tavily retrieves recent news and source snippets for the selected window, and Gemini writes the cited script using only those snippets. If no sources are found, the job fails rather than inventing an episode. Audio is synthesized with Gnani Timbre and saved in a private bucket. The API checks the verified Supabase user ID on every briefing, episode, and audio request. Audio is fetched through the API, so the bucket and object URLs are never public.
 
@@ -29,12 +29,12 @@ Daily schedules use IANA time zones. A repeated wall time during a daylight-savi
 
 - **Web:** Next.js App Router, React, Supabase Auth magic links
 - **API:** FastAPI, SQLAlchemy, PostgreSQL, Supabase JWT verification
-- **Worker:** separate always-on Python worker, Postgres queue and advisory lock
+- **Worker:** Python worker on a GitHub Actions schedule, Postgres queue and advisory lock
 - **Research and script:** Tavily Search plus Gemini API
 - **Speech:** Gnani Timbre REST TTS, MP3 output
 - **Audio storage:** private Supabase Storage bucket
 - **Email:** Resend
-- **Deployment:** Vercel for the web app, Render for the API and worker, Supabase for Auth, Postgres, and Storage
+- **Deployment:** Vercel Hobby for the web app, Render Free for the API, GitHub Actions for scheduled jobs, and Supabase Free for Auth, Postgres, and Storage
 
 ## Set up the services
 
@@ -43,9 +43,9 @@ Daily schedules use IANA time zones. A repeated wall time during a daylight-savi
 3. In Resend, verify a sender domain and create a sending-only API key for that domain. Configure Supabase Auth custom SMTP with host `smtp.resend.com`, port `465`, username `resend`, and the Resend API key as the password. Supabase's default SMTP is restricted to project team addresses, so custom SMTP is required for other users. Use the same key for the worker's `RESEND_API_KEY`, and set `EMAIL_FROM` to an address on the verified domain.
 4. Get personal keys from the [Tavily dashboard](https://app.tavily.com/home), [Google AI Studio](https://aistudio.google.com/apikey), and the Gnani dashboard. The app defaults to `gemini-3.5-flash-lite` and Gnani `timbre-v3.0` with voice `Shivani`; each can be changed with environment variables.
 5. In Supabase project settings, copy the project URL, publishable key, and service-role/secret key. Get the Postgres connection string from the Supabase **Connect** dialog. For Render, use the **Session pooler** connection string, not a manually composed host. Replace the password placeholder and URL-encode reserved characters in the password.
-6. Create `api/.env` from [`api/.env.example`](api/.env.example) only if it does not already exist. If it does, merge in missing settings so existing keys are preserved. Create `web/.env.local` from [`web/.env.example`](web/.env.example). Use personal keys and keep the Supabase service-role key only in the API and worker environments. Never commit either env file.
+6. Create `api/.env` from [`api/.env.example`](api/.env.example) only if it does not already exist. If it does, merge in missing settings so existing keys are preserved. Create `web/.env.local` from [`web/.env.example`](web/.env.example). Use personal keys and keep the Supabase service-role key only in the API, worker, and GitHub Actions secret stores. Never commit either env file.
 
-The API converts `postgres://` and `postgresql://` database URLs to the `postgresql+psycopg://` SQLAlchemy driver. Use the Supabase Postgres connection string with SSL enabled. The service-role key is used only for server-side access to the private audio bucket. In Vercel, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (or the publishable key), and `NEXT_PUBLIC_API_URL`. In Render, set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `AUDIO_BUCKET` on both services. Add `CORS_ORIGINS` to the API, then add `TAVILY_API_KEY`, `GEMINI_API_KEY`, `GNANI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_URL` to the worker as listed in `render.yaml`.
+The API converts `postgres://` and `postgresql://` database URLs to the `postgresql+psycopg://` SQLAlchemy driver. Use the Supabase Postgres connection string with SSL enabled. The service-role key is used only for server-side access to the private audio bucket. In Vercel, set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (or the publishable key), and `NEXT_PUBLIC_API_URL`. In Render, set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `AUDIO_BUCKET`. Set `CORS_ORIGINS` to the exact Vercel web origin. In GitHub repository settings, add Actions secrets named `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TAVILY_API_KEY`, `GEMINI_API_KEY`, `GNANI_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_URL`. Add the repository variable `ENABLE_SCHEDULED_WORKER=true` only after all secrets are configured. The scheduled job stays disabled until that variable is set.
 
 ## Run locally
 
@@ -72,15 +72,19 @@ The web app uses `NEXT_PUBLIC_API_URL=http://localhost:8000` by default. The API
 
 ## Deploy
 
-### Render API and worker
+### Render API
 
-Connect this folder to Render and use [`render.yaml`](render.yaml) as a Blueprint. The API and scheduler are configured as continuously running paid services in Singapore. Add the `DATABASE_URL`, `SUPABASE_URL`, and storage credentials to both services. Add Tavily, Gemini, Gnani, Resend, `EMAIL_FROM`, and the deployed `APP_URL` to the worker. Set the API `CORS_ORIGINS` to the exact deployed web origin.
+Connect this repository to Render and use [`render.yaml`](render.yaml) as a Blueprint. It creates only the FastAPI service on Render's Free web plan. Add `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `CORS_ORIGINS` to that service.
 
-The worker must stay at one instance while using a Gnani account that allows one active synthesis at a time. The advisory lock stops a second worker from running duplicate schedules. At the current published price, each `0.5c-512mb` always-on Render service is $7/month, so the API and worker total $14/month before usage-based charges. See [Render pricing](https://render.com/pricing) before applying the Blueprint. The Gnani credit does not cover hosting or other API usage.
+The Render Blueprint creates only a Free web service. Free Render web services sleep after 15 minutes without inbound traffic and take about a minute to start on the next request. Free instances also share a 750-hour monthly allowance across the workspace. The scheduler runs as a GitHub Actions workflow, which is free for standard hosted runners on public repositories. It checks every five minutes, and GitHub may delay scheduled runs during high load. GitHub disables scheduled workflows on public repositories after 60 days without repository activity. See the [Render Free plan limits](https://render.com/docs/free), [GitHub schedule behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows), and [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions). Provider APIs may have separate usage limits or charges.
+
+### GitHub Actions worker
+
+The [`scheduled-worker.yml`](.github/workflows/scheduled-worker.yml) workflow runs one worker cycle every five minutes. In the repository, open **Settings → Secrets and variables → Actions** and add the listed secrets. Also add repository variable `ENABLE_SCHEDULED_WORKER` with value `true` after all secrets are in place. The workflow has a manual **Actions → Scheduled briefing worker → Run workflow** trigger for initial verification.
 
 ### Vercel web app
 
-Import the `web/` directory as the Vercel project root and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (or the Supabase publishable key), and `NEXT_PUBLIC_API_URL` to the public API URL. After the first deploy, add that URL to Supabase Auth, set `APP_URL` and API `CORS_ORIGINS`, and update the Supabase Auth redirect allow-list.
+Import the `web/` directory as the Vercel project root and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (or the Supabase publishable key), and `NEXT_PUBLIC_API_URL` to the public Render API URL. Deploy the API first, then the web app. After Vercel assigns the production URL, set it as `APP_URL` in GitHub Actions and as the API's `CORS_ORIGINS` in Render. Add the site URL and `/auth/callback**` redirect to Supabase Auth. Vercel Hobby is free for personal projects; see [Vercel Hobby plan](https://vercel.com/docs/plans/hobby).
 
 ## API surface
 
